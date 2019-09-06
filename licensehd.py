@@ -23,20 +23,52 @@ yearsPattern = re.compile(
 licensePattern = re.compile(r"license", re.IGNORECASE)
 emptyPattern = re.compile(r'^\s*$')
 
+        
+class CopyrightLine(object):
+    """
+    Copyright Line must contain the "Copyright" and a year range, eg  
+
+       * Copyright (c) 2019-2019 Opticks Team. All Rights Reserved.
+
+    """  
+    pattern = re.compile("(?P<pre>.*)(?P<yr0>[0-9]{4})\-(?P<yr1>[0-9]{4})(?P<post>.*)$")  
+    def __init__(self, header):
+        lines = filter( lambda l:l.find("Copyright") > -1, header )
+        assert len(lines) > 0 
+        line = lines[0] 
+        m = self.pattern.match(line)
+        assert m is not None, line 
+        self.d = m.groupdict()
+
+    def matches(self, line):
+        """year range is excluded from match """
+        return line.startswith(self.d["pre"]) and line.rstrip().endswith(self.d["post"]) 
+
+    def __repr__(self):
+        return " %(pre)s %(yr0)s %(yr1)s %(post)s " % self.d  
+               
 
 class LicenseHD(object):
     headlines = 30
+
     def __init__(self, path, args):
         self.path = path
         self.args = args
-        self.header = args.template(path)  # header text customized to file type 
-         
+
+        header = args.template(path)  # header text customized to file type
+        copyrightline = CopyrightLine(header)
+
+        self.copyrightline = copyrightline
+        self.header = header 
+
         settings = FT(path)
 
         self.keep_first = settings.get("keepFirst")
         self.block_comment_start_pattern = settings.get("blockCommentStartPattern")
         self.block_comment_end_pattern = settings.get("blockCommentEndPattern")
         self.line_comment_start_pattern = settings.get("lineCommentStartPattern")
+
+        log.debug("\n".join(["settings"] + ["%25s : %r " % (kv[0], kv[1]) for kv in settings.items() ]))
 
         with open(path, 'r', encoding=args.encoding) as f:
             self.lines = f.readlines()
@@ -46,127 +78,127 @@ class LicenseHD(object):
         d["path"] = path
         d["ftype"] = settings["ftype"]
         d["settings"] = settings
+
         d["skip"] = 0 
-        d["headStart"] = None
-        d["headEnd"] = None
-        d["haveLicense"] = None
-        d["yearsLine"] = None
+        d["headStart"] = -1
+        d["headEnd"] = -1
+        d["copyrightLine"] = -1
+        d["otherCopyrightLine"] = -1
+        d["comment"] = ""
 
         self.parse_head(d)  
         self.d = d 
-        self.replace = d["headStart"] is not None and d["headEnd"] is not None and d["haveLicense"] 
+
+        has_header = d["headStart"] > -1 and d["headEnd"] > -1
+        has_license = has_header and d["copyrightLine"] > -1 
+        has_other_license = has_header and d["otherCopyrightLine"] > -1 
+
+        self.has_header = has_header 
+        self.has_license = has_license
+        self.has_other_license = has_other_license
+
+        self.d["msg"] = self.msg 
+
+
+        if has_header:
+            _header = self.lines[d["headStart"]:d["headEnd"]+1]   
+        else:
+            _header = None
+        pass
+        self._header = _header      
+
+        prehead = self.lines[0:self.d["headStart"]] if self.has_license else self.lines[0:self.d["skip"]]
+        posthead = self.lines[self.d["headEnd"]+1:] if self.has_license else self.lines[self.d["skip"]:]
+
+        self.prehead = prehead
+        self.posthead = posthead
+
 
     def parse_head(self, d):
-        """
-        Parse first lines of the file  
-        #. on reaching something other than empty or comment, stop looking for header
-        """ 
         rlines = self.lines[:self.headlines] 
-
-        skip = 0 
-        head_start = None
         i = 0
-        nohead = False
-        
         for line in rlines:
+            log.debug(line)
+
             if i == 0 and self.keep_first and self.keep_first.findall(line):
-                skip = i + 1     # can only be 1  
+                d["skip"] = i + 1     # can only be 1  
             elif emptyPattern.findall(line):
                 pass
             elif self.block_comment_start_pattern and self.block_comment_start_pattern.findall(line):
-                head_start = i
+                d["comment"] = "block" 
+                d["headStart"] = i
                 break
             elif self.line_comment_start_pattern and self.line_comment_start_pattern.findall(line):
-                head_start = i
+                d["comment"] = "line" 
+                d["headStart"] = i
                 break
-            elif not self.block_comment_start_pattern and \
-                    self.line_comment_start_pattern and \
-                    self.line_comment_start_pattern.findall(line):
-                head_start = i
+            elif not self.block_comment_start_pattern and self.line_comment_start_pattern and self.line_comment_start_pattern.findall(line):
+                d["comment"] = "line" 
+                d["headStart"] = i
                 break
             else:
-                nohead = True 
                 break 
             pass
             i = i + 1
         pass
 
-        if i == len(rlines): nohead = True
+        log.debug("   i:%d rlines:%d skip:%d headStart:%d comment:%s " % ( i, len(rlines), d["skip"], d["headStart"], d["comment"] ))
 
-        if not nohead:      
-            d["skip"] = skip
-            d["headStart"] = head_start
-            pass
-            if self.block_comment_start_pattern:
+        if d["headStart"] > -1:
+            if d["comment"] == "block":
                 self.parse_block_comment(d, i, rlines)    
-            else:
+            elif d["comment"] == "line":
                 self.parse_line_comment(d, i, rlines)    
             pass
         pass
 
     def parse_block_comment(self, d, i, rlines):
-        have_license = None
-        years_line = None
-        head_end = None
-        pass
-
         for j in range(i, len(rlines)):
             line = rlines[j]  
-            if licensePattern.findall(line):
-                have_license = True
-            elif yearsPattern.findall(line):
-                have_license = True
-                years_line = j
+            if self.copyrightline.matches(line):
+                d["copyrightLine"] = j
+            elif line.find("Copyright") > -1:
+                d["otherCopyrightLine"] = j
             elif self.block_comment_end_pattern.findall(line):
                 d["headEnd"] = j 
-                d["haveLicense"] = have_license 
-                d["yearsLine"] = years_line 
                 break  
             pass 
         pass  
 
     def parse_line_comment(self, d, i, rlines):
-        """
-        # if we went through all the lines without finding the end of the block, it could be that the whole
-        # file only consisted of the header, so lets return the last line index
-        """
         if not self.line_comment_start_pattern: return
-
-        have_license = None
-        years_line = None
-        ended = False
-
         for j in range(i, len(rlines)):
             line = rlines[j]  
-            if self.line_comment_start_pattern.findall(line) and licensePattern.findall(line):
-                have_license = True
-            elif yearsPattern.findall(line):
-                have_license = True
-                years_line = j
+            if self.line_comment_start_pattern.findall(line) and self.copyrightline.matches(line):
+                d["copyrightLine"] = j
+            elif line.find("Copyright") > -1:
+                d["otherCopyrightLine"] = j
             elif not self.line_comment_start_pattern.findall(line):
                 d["headEnd"] = j - 1 
-                d["haveLicense"] = have_license 
-                d["yearsLine"] = years_line 
-                ended = True 
             else:
                  pass
             pass 
         pass
-        if not ended:
+        if d["headEnd"] == -1:
             d["headEnd"] = len(rlines) - 1  
-            d["haveLicense"] = have_license 
-            d["yearsLine"] = years_line 
         pass
 
     def __str__(self):
         return "\n".join(["%20s : %s " % (kv[0], kv[1]) for kv in self.d.items() ]) 
 
     def __repr__(self):
-        return " hl:%(haveLicense)1d hs:%(headStart)2d he:%(headEnd)2d : %(path)30s " % self.d 
+        return " sk:%(skip)1d cpl:%(copyrightLine)2d  ocpl:%(otherCopyrightLine)2d  hs:%(headStart)2d he:%(headEnd)2d : %(msg)-20s :  %(path)-30s     " % self.d 
 
-    head_start = property(lambda self:self.d["headStart"])
-    head_end = property(lambda self:self.d["headEnd"])
-    skip = property(lambda self:self.d["skip"])
+    def _get_msg(self):
+        if self.has_other_license:
+            msg = "has_other_license"
+        elif self.has_license:
+            msg = "has_license"
+        else:
+            msg = "no_license"
+        pass
+        return msg 
+    msg = property(_get_msg)
 
     def write(self):
         p = self.path 
@@ -174,18 +206,11 @@ class LicenseHD(object):
         porig = "%s.orig" % p
  
         with open(ptmp, 'w', encoding=self.args.encoding) as fw:
-            if self.replace:
-                fw.writelines(self.lines[0:self.head_start])
-                fw.writelines(self.header)
-                fw.writelines(self.lines[self.head_end + 1:])
-                print("\n[---\n"+"".join(lines[self.head_start:self.head_end+1])+"\n]---\n")  
-            else:
-                fw.writelines(self.lines[0:self.skip])
-                fw.writelines(self.header)
-                fw.writelines(self.lines[self.skip:])
-            pass 
+            fw.writelines(self.prehead)
+            fw.writelines(self.header)
+            fw.writelines(self.posthead)
         pass
-        if self.replace:
+        if self.has_license:
             copyfile( p, porig )
         pass
         copystat( p, ptmp )     
@@ -217,17 +242,20 @@ def get_paths(fnpatterns, start_dir="."):
     :param start_dir: directory where to start searching
     :return: generator that returns one path after the other
     """
-    seen = set()
+    paths = []
     for root, dirs, files in os.walk(start_dir):
         names = []
         for pattern in fnpatterns:
             names += fnmatch.filter(files, pattern)
+        pass 
         for name in names:
             path = os.path.join(root, name)
-            if path in seen:
+            if path in paths:
                 continue
-            seen.add(path)
-            yield path
+            paths.append(path)
+        pass 
+    pass 
+    return paths 
 
 class LicenseTmpl(object):
     def __init__(self, path, args):
@@ -276,7 +304,7 @@ def parse_args():
     parser.add_argument("paths", nargs="*", default=[], help="File paths to process")
     parser.add_argument("--projdir", default=None, help="Directory to process")
     parser.add_argument("--tmpl", default="under-apache-2", help="Template name")
-    parser.add_argument("--years", default="2019", help="Year or year range")
+    parser.add_argument("--years", default="2019-2019", help="Year range")
     parser.add_argument("--owner", default="Opticks Team", help="Name of copyright owner")
     parser.add_argument("--projname", default="Opticks", help="Name of project")
     parser.add_argument("--projurl", default="https://bitbucket.org/simoncblyth/opticks", help="Url of project")
@@ -303,10 +331,25 @@ def test_template(args):
 if __name__ == '__main__':
 
     args = parse_args()
-    paths = args.paths if len(args.paths) > 0 else get_paths(FT.patterns, args.projdir)  
+    log.debug(" paths %d " % len(args.paths))
+    pass
+    if len(args.paths) == 1 and os.path.isdir(args.paths[0]):
+        paths = get_paths(FT.patterns, args.paths[0])
+    elif len(args.paths) > 0:
+        paths = args.paths
+    elif not args.projdir is None:  
+        paths = get_paths(FT.patterns, args.projdir)  
+    else:
+        assert 0
+    pass
     for path in paths:
         lh = LicenseHD(path, args)
-        print(repr(lh))
+        print("%r" % lh )
+        if lh.has_other_license or lh.has_license:
+            pass
+        else:
+            pass
+            lh.write()
+        pass 
     pass 
-
 
