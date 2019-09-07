@@ -1,4 +1,14 @@
 #!/usr/bin/env python
+"""
+
+::
+
+    [blyth@localhost opticks]$ find . -name '*.py' -exec grep -H coding: {} \;
+    ./notes/conf.py:# -*- coding: utf-8 -*-
+    ./analytic/gdml2idmap.py:#-*- coding: utf-8 -*-
+    ./conf.py:# -*- coding: utf-8 -*-
+
+"""
 
 import os
 from collections import OrderedDict as odict 
@@ -16,10 +26,10 @@ class FileTypes(object):
             "headerStartLine": "/*\n",
             "headerEndLine": " */\n",
             "headerLinePrefix": " * ",
-            "headerLineSuffix": None,
+            "headerLineSuffix": None
         },
         "script": {
-            "extensions": [".sh", ".csh", ".py", ".pl", ".bash"],
+            "extensions": [".sh", ".csh", ".pl", ".bash"],
             "keepFirst": re.compile(r'^#!|^# -\*-'),
             "blockCommentStartPattern": None,
             "blockCommentEndPattern": None,
@@ -44,7 +54,7 @@ class FileTypes(object):
         },
         "python": {
             "extensions": [".py"],
-            "keepFirst": re.compile(r'^#!|^# +pylint|^# +-\*-|^# +coding|^# +encoding'),
+            "keepFirst": re.compile(r'^#!|^# +pylint|^# +-\*-|^#-\*-|^# +coding|^# +encoding'),
             "blockCommentStartPattern": None,
             "blockCommentEndPattern": None,
             "lineCommentStartPattern": re.compile(r'\s*#'),
@@ -79,7 +89,7 @@ class FileTypes(object):
             "headerLineSuffix": None
         },
         "c": {
-            "extensions": [".c", ".cc", ".cpp", "c++", ".h", ".hpp", ".hh", ".cu", ".cuh" ],
+            "extensions": [".c", ".cc", ".cpp", "c++", ".h", ".hpp", ".hh", ".cu", ".cuh", ".m", ".mm" ],
             "keepFirst": None,
             "blockCommentStartPattern": re.compile(r'^\s*/\*'),
             "blockCommentEndPattern": re.compile(r'\*/\s*$'),
@@ -148,7 +158,7 @@ class FileTypes(object):
             "headerStartLine": "%% -*- erlang -*-\n%% %CopyrightBegin%\n%%\n",
             "headerEndLine": "%%\n%% %CopyrightEnd%\n\n",
             "headerLinePrefix": "%% ",
-            "headerLineSuffix": None,
+            "headerLineSuffix": None
         }
     }
 

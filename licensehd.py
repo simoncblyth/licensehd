@@ -1,6 +1,29 @@
 #!/usr/bin/env python
 # encoding: utf-8
+"""
+licensehd.py
+==============
 
+For high level usage see::
+
+   env-;licensehd-;licensehd-vi 
+
+
+::
+
+   licensehd.py ~/opticks
+   licensehd.py ~/opticks/okop/okop.bash  --level debug 
+
+
+Python coding directives need to be on 1st or 2nd line ?
+
+::
+
+   find . -name '*.py' -exec grep -H coding {} \;
+
+
+
+"""
 import logging, os, sys, argparse, fnmatch
 log = logging.getLogger(__name__)
 
@@ -8,8 +31,11 @@ from string import Template
 from shutil import copyfile, copymode, copystat
 from collections import OrderedDict as odict 
 
-# third party external, which apparently handles encodings better than standard re
-import regex as re
+# import regex as re
+# regex is a third party external, which apparently handles encodings better 
+# than standard re but it seems to not be necessary in my usage 
+
+import re
 
 # local modules
 from py2open import open
@@ -17,21 +43,19 @@ from filetypes import FileTypes
 
 FT = FileTypes()
 
-yearsPattern = re.compile(
-    r"(?<=Copyright\s*(?:\(\s*[Cc©]\s*\)\s*))?([0-9][0-9][0-9][0-9](?:-[0-9][0-9]?[0-9]?[0-9]?)?)",
-    re.IGNORECASE)
-licensePattern = re.compile(r"license", re.IGNORECASE)
 emptyPattern = re.compile(r'^\s*$')
 
         
 class CopyrightLine(object):
     """
-    Copyright Line must contain the "Copyright" and a year range, eg  
+    Copyright Line must contain the "Copyright" and a year OR year range, eg  
 
-       * Copyright (c) 2019-2019 Opticks Team. All Rights Reserved.
+       * Copyright (c) 2019 Opticks Team. All Rights Reserved.
+       * Copyright (c) 2019-2020 Opticks Team. All Rights Reserved.
 
     """  
-    pattern = re.compile("(?P<pre>.*)(?P<yr0>[0-9]{4})\-(?P<yr1>[0-9]{4})(?P<post>.*)$")  
+    pattern = re.compile("(?P<pre>.*?)(?P<yrs>[0-9]{4}(?:-[0-9][0-9]?[0-9]?[0-9]?)?)(?P<post>.*)$")
+
     def __init__(self, header):
         lines = filter( lambda l:l.find("Copyright") > -1, header )
         assert len(lines) > 0 
@@ -48,11 +72,60 @@ class CopyrightLine(object):
         return " %(pre)s %(yr0)s %(yr1)s %(post)s " % self.d  
                
 
+
+class LicenseTmpl(object):
+    end_blank = True
+    def __init__(self, path, args):
+        with open(path, 'r') as f:
+            lines = f.readlines()
+        pass
+        lines = [Template(line).substitute(args.d) for line in lines]
+        self.lines = lines 
+
+    def __call__(self, path):
+        """
+        :return template lines formatted for type of the path:
+        """
+        lines = []
+        settings = FT(path)
+        header_start_line = settings["headerStartLine"]
+        header_end_line = settings["headerEndLine"]
+        header_line_prefix = settings["headerLinePrefix"]
+        header_line_suffix = settings["headerLineSuffix"]
+        #header_spacer = settings["headerSpacer"]
+
+        if header_start_line is not None:
+            lines.append(header_start_line)
+        for line in self.lines:
+            tmp = line
+            if header_line_prefix is not None and line == '\n':
+                tmp = header_line_prefix.rstrip() + tmp
+            elif header_line_prefix is not None:
+                tmp = header_line_prefix + tmp
+            pass  
+            if header_line_suffix is not None:
+                tmp = tmp + header_line_suffix
+            pass
+            lines.append(tmp)
+        pass
+        if header_end_line is not None:
+            lines.append(header_end_line)
+        pass
+        if self.end_blank:
+            lines.append("\n")
+        pass
+        return lines
+
+    def __str__(self):
+        return "".join(self.lines) 
+
+
 class LicenseHD(object):
     headlines = 30
 
     def __init__(self, path, args):
         self.path = path
+        self.ptmp = "%s.tmp" % path
         self.args = args
 
         header = args.template(path)  # header text customized to file type
@@ -107,8 +180,16 @@ class LicenseHD(object):
         pass
         self._header = _header      
 
-        prehead = self.lines[0:self.d["headStart"]] if self.has_license else self.lines[0:self.d["skip"]]
-        posthead = self.lines[self.d["headEnd"]+1:] if self.has_license else self.lines[self.d["skip"]:]
+        if self.has_license:
+            prehead = self.lines[0:self.d["headStart"]] 
+            posthead = self.lines[self.d["headEnd"]+1:]
+        else:
+            prehead = self.lines[0:self.d["skip"]]
+            posthead = self.lines[self.d["skip"]:]
+        pass 
+
+        #print("prehead\n" + "".join(prehead) )
+        #print("posthead\n" + "".join(posthead) )
 
         self.prehead = prehead
         self.posthead = posthead
@@ -118,10 +199,11 @@ class LicenseHD(object):
         rlines = self.lines[:self.headlines] 
         i = 0
         for line in rlines:
-            log.debug(line)
+            log.debug(" i %d skip %d  line [%s]  " % ( i, d["skip"], line ))
 
-            if i == 0 and self.keep_first and self.keep_first.findall(line):
-                d["skip"] = i + 1     # can only be 1  
+            if (i == 0 or d["skip"] > 0) and self.keep_first and self.keep_first.findall(line):
+                d["skip"] = i + 1      
+                log.debug(" keep_first skip line [%s] " % line )
             elif emptyPattern.findall(line):
                 pass
             elif self.block_comment_start_pattern and self.block_comment_start_pattern.findall(line):
@@ -159,26 +241,39 @@ class LicenseHD(object):
                 d["copyrightLine"] = j
             elif line.find("Copyright") > -1:
                 d["otherCopyrightLine"] = j
-            elif self.block_comment_end_pattern.findall(line):
+            elif self.block_comment_end_pattern.findall(line) and LicenseTmpl.end_blank == False:
                 d["headEnd"] = j 
+                log.debug("found block_comment pattern-end headEnd %d " % d["headEnd"])
+                break  
+            elif emptyPattern.findall(line) and LicenseTmpl.end_blank == True:
+                d["headEnd"] = j 
+                log.debug("found block_comment empty-end  headEnd %d " % d["headEnd"])
                 break  
             pass 
         pass  
 
     def parse_line_comment(self, d, i, rlines):
+        """
+        When using LicenseTmpl.end_blank the blank line must be
+        treated as a part of header to avoid file growing by a blank line
+        on each update. 
+        """  
         if not self.line_comment_start_pattern: return
         for j in range(i, len(rlines)):
             line = rlines[j]  
+            log.debug(line)
+
             if self.line_comment_start_pattern.findall(line) and self.copyrightline.matches(line):
                 d["copyrightLine"] = j
             elif line.find("Copyright") > -1:
                 d["otherCopyrightLine"] = j
             elif not self.line_comment_start_pattern.findall(line):
-                d["headEnd"] = j - 1 
-            else:
-                 pass
+                d["headEnd"] = j if LicenseTmpl.end_blank else j - 1  
+                log.debug("found line_comment headEnd %d with line [%s] " % (d["headEnd"], line) )
+                break
             pass 
         pass
+        # hmm : below seems an arbitrary setting of headEnd depending on the headlines
         if d["headEnd"] == -1:
             d["headEnd"] = len(rlines) - 1  
         pass
@@ -200,39 +295,53 @@ class LicenseHD(object):
         return msg 
     msg = property(_get_msg)
 
-    def write(self):
-        p = self.path 
-        ptmp = "%s.tmp" % p
-        porig = "%s.orig" % p
- 
-        with open(ptmp, 'w', encoding=self.args.encoding) as fw:
+    def write_tmp(self):
+        assert os.path.exists(self.path)
+        with open(self.ptmp, 'w', encoding=self.args.encoding) as fw:
             fw.writelines(self.prehead)
             fw.writelines(self.header)
             fw.writelines(self.posthead)
         pass
-        if self.has_license:
-            copyfile( p, porig )
+        copystat( self.path, self.ptmp )     
+
+    def check_tmp(self):
+        """
+        sanity check that the processing does not loose bits of the file
+        """
+        chk0 = open(self.path, "r").readlines()
+        chk  = open(self.ptmp, "r").readlines()
+
+        if self.has_license and len(chk) != len(chk0):
+            log.fatal("has_license update would have unexpectedly changed file length %s %s %d %d " % (self.path, self.ptmp, len(chk), len(chk0) ))
+            return False  
         pass
-        copystat( p, ptmp )     
-
-        # sanity check that the processing does not loose bits of the file
-        chk0 = open(p, "r").readlines()
-        chk  = open(ptmp, "r").readlines()
-
         if len(chk) < len(chk0):
-            log.fatal("failed to process_header for %s %s %d %d " % (p, ptmp, len(chk), len(chk0) ))
-        else:
-            if os.path.isfile(p):
-                os.remove(p) 
-            pass
-            copyfile( ptmp, p )
-            copystat( ptmp, p )
-      
-            if os.path.isfile(ptmp):
-                os.remove(ptmp) 
-            pass
-        pass  
+            log.fatal("write would have decreased file length  %s %s %d %d " % (self.path, self.ptmp, len(chk), len(chk0) ))
+            return False  
+        pass
+        return True 
 
+    def adopt_tmp(self):
+        p = self.path
+        ptmp = self.ptmp
+
+        if os.path.isfile(p):
+            os.remove(p) 
+        pass
+        copyfile( ptmp, p )
+        copystat( ptmp, p )
+  
+        if os.path.isfile(ptmp):
+            os.remove(ptmp) 
+        pass
+
+    def write(self):
+        """
+        """
+        self.write_tmp() 
+        ok = self.check_tmp() 
+        if not ok: return
+        self.adopt_tmp()
 
 
 def get_paths(fnpatterns, start_dir="."):
@@ -257,47 +366,6 @@ def get_paths(fnpatterns, start_dir="."):
     pass 
     return paths 
 
-class LicenseTmpl(object):
-    def __init__(self, path, args):
-        with open(path, 'r') as f:
-            lines = f.readlines()
-        pass
-        lines = [Template(line).substitute(args.d) for line in lines]
-        self.lines = lines 
-
-    def __call__(self, path):
-        """
-        :return template lines formatted for type of the path:
-        """
-        lines = []
-        settings = FT(path)
-        header_start_line = settings["headerStartLine"]
-        header_end_line = settings["headerEndLine"]
-        header_line_prefix = settings["headerLinePrefix"]
-        header_line_suffix = settings["headerLineSuffix"]
-
-        if header_start_line is not None:
-            lines.append(header_start_line)
-        for line in self.lines:
-            tmp = line
-            if header_line_prefix is not None and line == '\n':
-                tmp = header_line_prefix.rstrip() + tmp
-            elif header_line_prefix is not None:
-                tmp = header_line_prefix + tmp
-            pass  
-            if header_line_suffix is not None:
-                tmp = tmp + header_line_suffix
-            pass
-            lines.append(tmp)
-        if header_end_line is not None:
-            lines.append(header_end_line)
-        pass 
-        return lines
-
-    def __str__(self):
-        return "".join(self.lines) 
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="License header updater")
     
@@ -310,6 +378,8 @@ def parse_args():
     parser.add_argument("--projurl", default="https://bitbucket.org/simoncblyth/opticks", help="Url of project")
     parser.add_argument("--enc", nargs=1, dest="encoding", default="utf-8",help="Encoding of program files")
     parser.add_argument("--level", default="info", help="logging level" )
+    parser.add_argument("--update", action="store_true", default=False, help="Updating existing license, eg when changing to new year range" )
+    
     args = parser.parse_args()
     fmt = '[%(asctime)s] p%(process)s {%(pathname)s:%(lineno)d} %(levelname)s - %(message)s'
     #fmt = '[%(asctime)s] p%(process)s {%(lineno)d} %(levelname)s - %(message)s'
@@ -344,11 +414,12 @@ if __name__ == '__main__':
     pass
     for path in paths:
         lh = LicenseHD(path, args)
-        print("%r" % lh )
-        if lh.has_other_license or lh.has_license:
+        #print("%r" % lh )
+        if lh.has_other_license:
             pass
+        elif lh.has_license and args.update:  
+            lh.write()
         else:
-            pass
             lh.write()
         pass 
     pass 
